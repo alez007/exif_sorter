@@ -1,5 +1,8 @@
 import argparse
 import os
+import re
+import datetime
+from dateutil.parser import parse
 
 import exiftool
 from classes.validate_folder import ValidateFolder
@@ -67,8 +70,6 @@ def parse_cli_arguments():
 
 
 if __name__ == '__main__':
-    batch_size = 2
-
     source_dir, dest_dir, dry_run, verbose, debug = parse_cli_arguments()
     log_message("started sorter with the following arguments: %r" % {
         'source_dir': source_dir,
@@ -78,34 +79,80 @@ if __name__ == '__main__':
         'debug': debug
     })
 
-    def get_batch(it, size, prefix, list_of_files = list()):
-        chunk = list(zip(range(size), it))
-        if len(chunk) == 0:
+    def parse_folder(folder, batch_size, callback):
+        with os.scandir(folder) as it:
+            chunk = list(zip(range(batch_size), it))
+
+            while len(chunk) != 0:
+                list_of_files = list()
+                for _, entry in chunk:
+                    if entry.name.startswith('.'):
+                        continue
+                    if entry.is_file():
+                        list_of_files.append(os.path.join(folder, entry.name))
+
+                callback(list_of_files)
+                chunk = list(zip(range(batch_size), it))
+
             it.close()
+            return list_of_files
+
+    def generate_paths(metadata):
+        for d in metadata:
+            generate_path(d)
+
+    def generate_path(d):
+        create_date = None
+        try:
+            create_date = get_date(str(d['EXIF:CreateDate']) + str(d['EXIF:OffsetTime']))
+        except KeyError:
+            pass
+
+        if not create_date:
+            try:
+                create_date = get_date(str(d['File:FileModifyDate']))
+            except KeyError:
+                pass
+
+        if not create_date:
+            create_date = get_date(d['File:FileName'])
+
+        print(create_date)
+
+    def get_date(date_string):
+        file_datetime = None
+
+        match = re.search(r'^(\d{4}:\d{2}:\d{2})', date_string)
+        if match:
+            try:
+                date_string = date_string[0:11].replace(':', '-') + date_string[12:]
+                file_datetime = parse(date_string)
+                return file_datetime.year, file_datetime.month, file_datetime.day
+            except ValueError:
+                pass
+
+        match = re.search(r'((\d{8})|(\d{4}(-|\/)\d{2}(-|\/)\d{2}))', date_string)
+        if not match:
+            print(date_string)
+            return None, None, None
+
+        for regex in ['%Y%m%d', '%Y-%m-%d', '%Y/%m/%d']:
+            try:
+                file_datetime = datetime.datetime.strptime(match.group(1), regex)
+            except ValueError:
+                pass
+
+        if file_datetime:
+            return file_datetime.year, file_datetime.month, file_datetime.day
+
+        return None, None, None
+
+    def print_metadata(files):
+        if not files:
             return
+        with exiftool.ExifTool() as et:
+            metadata = et.get_metadata_batch(files)
 
-        for _, entry in chunk:
-            if entry.name.startswith('.'):
-                continue
-            if entry.is_file():
-                list_of_files.append(os.path.join(prefix, entry.name))
-            if entry.is_dir():
-                dir_path = os.path.join(prefix, entry.name)
-                with os.scandir(dir_path) as it:
-                    batch = get_batch(it, size, dir_path)
-                    if batch:
-                        list_of_files.extend(batch)
+        generate_paths(metadata)
 
-        return list_of_files
-
-    with os.scandir(source_dir) as source_it:
-        files_batch = get_batch(source_it, batch_size, source_dir)
-
-        while files_batch:
-            with exiftool.ExifTool() as et:
-                metadata = et.get_metadata_batch(files_batch)
-            for d in metadata:
-                print("{:20.20} {:20.20}".format(d["SourceFile"], d["File:FileModifyDate"]))
-
-            files_batch = list()
-            get_batch(source_it, batch_size, source_dir, files_batch)
+    parse_folder(source_dir, 100, print_metadata)
