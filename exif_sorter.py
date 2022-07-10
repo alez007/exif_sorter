@@ -3,9 +3,10 @@ import os
 import re
 import datetime
 from dateutil.parser import parse
-
+from pathlib import Path
 import exiftool
 from classes.validate_folder import ValidateFolder
+import shutil
 
 def log_message(message=''):
     if verbose:
@@ -97,11 +98,13 @@ if __name__ == '__main__':
             it.close()
             return list_of_files
 
-    def generate_paths(metadata):
+    def generate_move_map(metadata, folder):
+        move_map = {}
         for d in metadata:
-            generate_path(d)
+            move_map[d['SourceFile']] = generate_path(d, folder)
+        return move_map
 
-    def generate_path(d):
+    def generate_path(d, folder):
         create_date = None
         try:
             create_date = get_date(str(d['EXIF:CreateDate']) + str(d['EXIF:OffsetTime']))
@@ -117,7 +120,13 @@ if __name__ == '__main__':
         if not create_date:
             create_date = get_date(d['File:FileName'])
 
-        print(create_date)
+        if not create_date:
+            return
+
+        year, month, day = create_date
+        full_path = os.path.join(folder, str(year).zfill(2), str(month).zfill(2), str(day).zfill(2))
+        Path(full_path).mkdir(parents=True, exist_ok=True)
+        return full_path
 
     def get_date(date_string):
         file_datetime = None
@@ -147,12 +156,14 @@ if __name__ == '__main__':
 
         return None, None, None
 
-    def print_metadata(files):
+    def move_files(files):
         if not files:
             return
         with exiftool.ExifTool() as et:
             metadata = et.get_metadata_batch(files)
 
-        generate_paths(metadata)
+        move_map = generate_move_map(metadata, dest_dir)
+        for file, destination in move_map.items():
+            shutil.move(file, os.path.join(destination, ''))
 
-    parse_folder(source_dir, 100, print_metadata)
+    parse_folder(source_dir, 100, move_files)
