@@ -166,7 +166,7 @@ def move_files(files):
         try:
             shutil.move(file, os.path.join(destination, ''))
         except shutil.Error as err:
-            log_message('Moving file %s to destination %s failed with %r' % file % destination % err, debug_only=True)
+            log_message('Moving file %s to destination %s failed with %r' % file, destination, err, debug_only=True)
             pass
 
 
