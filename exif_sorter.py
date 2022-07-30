@@ -61,9 +61,25 @@ def parse_cli_arguments():
         action='store_true'
     )
 
+    parser.add_argument(
+        '--move',
+        help='flag to move the files instead of copying them',
+        required=False,
+        default=False,
+        action='store_true'
+    )
+
+    parser.add_argument(
+        '--replace-file',
+        help='flag to replace the file if it already exists at the destination',
+        required=False,
+        default=False,
+        action='store_true'
+    )
+
     args = parser.parse_args()
     return getattr(args, 'source_dir'), getattr(args, 'dest_dir'), getattr(args, 'dry_run'), getattr(args, 'verbose'), \
-           getattr(args, 'debug')
+           getattr(args, 'debug'), getattr(args, 'move'), getattr(args, 'replace_file')
 
 
 def parse_folder(folder, batch_number, batch_size, callback):
@@ -93,11 +109,11 @@ def parse_folder(folder, batch_number, batch_size, callback):
         return list_of_files
 
 
-def generate_move_map(metadata, folder):
-    move_map = {}
+def generate_action_map(metadata, folder):
+    action_map = {}
     for d in metadata:
-        move_map[d['SourceFile']] = generate_path(d, folder)
-    return move_map
+        action_map[d['SourceFile']] = generate_path(d, folder)
+    return action_map
 
 
 def generate_path(d, folder):
@@ -121,7 +137,9 @@ def generate_path(d, folder):
 
     year, month, day = create_date
     full_path = os.path.join(folder, str(year).zfill(2), str(month).zfill(2), str(day).zfill(2))
-    Path(full_path).mkdir(parents=True, exist_ok=True)
+    log_message('creating destination path %s' % full_path)
+    if dry_run is False:
+        Path(full_path).mkdir(parents=True, exist_ok=True)
     return full_path
 
 
@@ -154,32 +172,55 @@ def get_date(date_string):
     return None, None, None
 
 
-def move_files(files):
+def handle_file(file, destination):
+    dest_folder = os.path.join(destination, '')
+    full_dest_file_path = os.path.join(dest_folder, os.path.basename(file))
+    log_message('%s file %s to destination %s' % (action, file, dest_folder))
+
+    if replace_file is False and os.path.isfile(full_dest_file_path):
+        log_message('file %s already exists at destination %s' % (file, dest_folder))
+        return
+
+    if dry_run is False:
+        if move is True:
+            shutil.move(file, os.path.join(destination, ''))
+        else:
+            shutil.copy2(file, os.path.join(destination, ''))
+
+
+def handle_files(files):
     if not files:
         return
     with exiftool.ExifTool() as et:
         log_message('Reading metadata for %r' % files)
         metadata = et.get_metadata_batch(files)
 
-    move_map = generate_move_map(metadata, dest_dir)
+    move_map = generate_action_map(metadata, dest_dir)
     for file, destination in move_map.items():
         try:
-            shutil.move(file, os.path.join(destination, ''))
+            handle_file(file, destination)
         except shutil.Error as err:
-            log_message('Moving file %s to destination %s failed with %r' % (file, destination, err), debug_only=True)
+            log_message(
+                '%s file %s to destination %s failed with %r' % (action, file, destination, err),
+                debug_only=True
+            )
             pass
 
 
 if __name__ == '__main__':
-    source_dir, dest_dir, dry_run, verbose, debug = parse_cli_arguments()
+    source_dir, dest_dir, dry_run, verbose, debug, move, replace_file = parse_cli_arguments()
+    if dry_run is True:
+        verbose = True
     log_message("started sorter with the following arguments: %r" % {
         'source_dir': source_dir,
         'dest_dir': dest_dir,
         'dry_run': dry_run,
         'verbose': verbose,
-        'debug': debug
+        'debug': debug,
+        'replace_file': replace_file
     })
     batch_number = 0
     batch_size = 100
+    action = "Move" if move else "Copy"
 
-    parse_folder(source_dir, batch_number, batch_size, move_files)
+    parse_folder(source_dir, batch_number, batch_size, handle_files)
